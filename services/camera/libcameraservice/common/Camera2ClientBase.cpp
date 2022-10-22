@@ -162,11 +162,6 @@ Camera2ClientBase<TClientBase>::~Camera2ClientBase() {
 
     disconnect();
 
-    if (mCameraServiceWatchdog != NULL) {
-        mCameraServiceWatchdog->requestExit();
-        mCameraServiceWatchdog.clear();
-    }
-
     ALOGI("Closed Camera %s. Client was: %s (PID %d, UID %u)",
             TClientBase::mCameraIdStr.string(),
             String8(TClientBase::mClientPackageName).string(),
@@ -252,12 +247,8 @@ status_t Camera2ClientBase<TClientBase>::dumpDevice(
 
 template <typename TClientBase>
 binder::Status Camera2ClientBase<TClientBase>::disconnect() {
-    if (mCameraServiceWatchdog != nullptr) {
-        // Initialization from hal succeeded, time disconnect.
-        return mCameraServiceWatchdog->WATCH_CUSTOM_TIMER(disconnectImpl(),
-                kDisconnectTimeoutMs / kCycleLengthMs, kCycleLengthMs);
-    }
-    return disconnectImpl();
+    return mCameraServiceWatchdog->WATCH_CUSTOM_TIMER(disconnectImpl(),
+            kDisconnectTimeoutMs / kCycleLengthMs, kCycleLengthMs);
 }
 
 template <typename TClientBase>

@@ -160,11 +160,6 @@ class Camera3OutputStream :
     bool isConsumedByHWTexture() const;
 
     /**
-     * Return if this output stream is consumed by CPU.
-     */
-    bool isConsumedByCPU() const;
-
-    /**
      * Return if the consumer configuration of this stream is deferred.
      */
     virtual bool isConsumerConfigurationDeferred(size_t surface_id) const;
@@ -341,11 +336,6 @@ class Camera3OutputStream :
     nsecs_t mTimestampOffset;
 
     /**
-     * If camera readout time is used rather than the start-of-exposure time.
-     */
-    bool mUseReadoutTime;
-
-    /**
      * Consumer end point usage flag set by the constructor for the deferred
      * consumer case.
      */
@@ -426,10 +416,8 @@ class Camera3OutputStream :
     nsecs_t mLastPresentTime = 0;
     nsecs_t mCaptureToPresentOffset = 0;
     static constexpr size_t kDisplaySyncExtraBuffer = 2;
-    static constexpr nsecs_t kSpacingResetIntervalNs = 50000000LL; // 50 millisecond
+    static constexpr nsecs_t kSpacingResetIntervalNs = 1000000000LL; // 1 second
     static constexpr nsecs_t kTimelineThresholdNs = 1000000LL; // 1 millisecond
-    static constexpr float kMaxIntervalRatioDeviation = 0.05f;
-    static constexpr int kMaxTimelines = 3;
     nsecs_t syncTimestampToDisplayLocked(nsecs_t t);
 
     // Re-space frames by delaying queueBuffer so that frame delivery has

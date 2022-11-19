@@ -18,6 +18,7 @@
 #define ATRACE_TAG ATRACE_TAG_CAMERA
 //#define LOG_NDEBUG 0
 
+#include <algorithm>
 #include <ctime>
 #include <fstream>
 
@@ -66,6 +67,7 @@ Camera3OutputStream::Camera3OutputStream(int id,
         mTraceFirstBuffer(true),
         mUseBufferManager(false),
         mTimestampOffset(timestampOffset),
+        mUseReadoutTime(false),
         mConsumerUsage(0),
         mDropBuffers(false),
         mMirrorMode(mirrorMode),
@@ -99,6 +101,7 @@ Camera3OutputStream::Camera3OutputStream(int id,
         mTraceFirstBuffer(true),
         mUseBufferManager(false),
         mTimestampOffset(timestampOffset),
+        mUseReadoutTime(false),
         mConsumerUsage(0),
         mDropBuffers(false),
         mMirrorMode(mirrorMode),
@@ -139,6 +142,7 @@ Camera3OutputStream::Camera3OutputStream(int id,
         mTraceFirstBuffer(true),
         mUseBufferManager(false),
         mTimestampOffset(timestampOffset),
+        mUseReadoutTime(false),
         mConsumerUsage(consumerUsage),
         mDropBuffers(false),
         mMirrorMode(mirrorMode),
@@ -187,6 +191,7 @@ Camera3OutputStream::Camera3OutputStream(int id, camera_stream_type_t type,
         mTraceFirstBuffer(true),
         mUseBufferManager(false),
         mTimestampOffset(timestampOffset),
+        mUseReadoutTime(false),
         mConsumerUsage(consumerUsage),
         mDropBuffers(false),
         mMirrorMode(mirrorMode),
@@ -461,17 +466,19 @@ status_t Camera3OutputStream::returnBufferCheckedLocked(
             }
         }
 
+        nsecs_t captureTime = (mUseReadoutTime && readoutTimestamp != 0 ?
+                readoutTimestamp : timestamp) - mTimestampOffset;
         if (mPreviewFrameSpacer != nullptr) {
-            res = mPreviewFrameSpacer->queuePreviewBuffer(timestamp - mTimestampOffset, transform,
-                    anwBuffer, anwReleaseFence);
+            nsecs_t readoutTime = (readoutTimestamp != 0 ? readoutTimestamp : timestamp)
+                    - mTimestampOffset;
+            res = mPreviewFrameSpacer->queuePreviewBuffer(captureTime, readoutTime,
+                    transform, anwBuffer, anwReleaseFence);
             if (res != OK) {
                 ALOGE("%s: Stream %d: Error queuing buffer to preview buffer spacer: %s (%d)",
                         __FUNCTION__, mId, strerror(-res), res);
                 return res;
             }
         } else {
-            nsecs_t captureTime = (mSyncToDisplay ? readoutTimestamp : timestamp)
-                    - mTimestampOffset;
             nsecs_t presentTime = mSyncToDisplay ?
                     syncTimestampToDisplayLocked(captureTime) : captureTime;
 
@@ -682,13 +689,16 @@ status_t Camera3OutputStream::configureConsumerQueueLocked(bool allowPreviewResp
         bool forceChoreographer = (timestampBase ==
                 OutputConfiguration::TIMESTAMP_BASE_CHOREOGRAPHER_SYNCED);
         bool defaultToChoreographer = (isDefaultTimeBase &&
-                isConsumedByHWComposer() &&
-                !property_get_bool("camera.disable_preview_scheduler", false));
+                isConsumedByHWComposer());
+        bool defaultToSpacer = (isDefaultTimeBase &&
+                isConsumedByHWTexture() &&
+                !isConsumedByCPU() &&
+                !isVideoStream());
         if (forceChoreographer || defaultToChoreographer) {
             mSyncToDisplay = true;
             mTotalBufferCount += kDisplaySyncExtraBuffer;
-        } else if (isConsumedByHWTexture() && !isVideoStream()) {
-            mPreviewFrameSpacer = new PreviewFrameSpacer(*this, mConsumer);
+        } else if (defaultToSpacer) {
+            mPreviewFrameSpacer = new PreviewFrameSpacer(this, mConsumer);
             mTotalBufferCount ++;
             res = mPreviewFrameSpacer->run(String8::format("PreviewSpacer-%d", mId).string());
             if (res != OK) {
@@ -701,12 +711,16 @@ status_t Camera3OutputStream::configureConsumerQueueLocked(bool allowPreviewResp
     mFrameCount = 0;
     mLastTimestamp = 0;
 
+    mUseReadoutTime =
+            (timestampBase == OutputConfiguration::TIMESTAMP_BASE_READOUT_SENSOR || mSyncToDisplay);
+
     if (isDeviceTimeBaseRealtime()) {
         if (isDefaultTimeBase && !isConsumedByHWComposer() && !isVideoStream()) {
             // Default time base, but not hardware composer or video encoder
             mTimestampOffset = 0;
         } else if (timestampBase == OutputConfiguration::TIMESTAMP_BASE_REALTIME ||
-                timestampBase == OutputConfiguration::TIMESTAMP_BASE_SENSOR) {
+                timestampBase == OutputConfiguration::TIMESTAMP_BASE_SENSOR ||
+                timestampBase == OutputConfiguration::TIMESTAMP_BASE_READOUT_SENSOR) {
             mTimestampOffset = 0;
         }
         // If timestampBase is CHOREOGRAPHER SYNCED or MONOTONIC, leave
@@ -716,7 +730,7 @@ status_t Camera3OutputStream::configureConsumerQueueLocked(bool allowPreviewResp
             // Reverse offset for monotonicTime -> bootTime
             mTimestampOffset = -mTimestampOffset;
         } else {
-            // If timestampBase is DEFAULT, MONOTONIC, SENSOR, or
+            // If timestampBase is DEFAULT, MONOTONIC, SENSOR, READOUT_SENSOR or
             // CHOREOGRAPHER_SYNCED, timestamp offset is 0.
             mTimestampOffset = 0;
         }
@@ -968,6 +982,10 @@ status_t Camera3OutputStream::disconnectLocked() {
     }
 
     returnPrefetchedBuffersLocked();
+
+    if (mPreviewFrameSpacer != nullptr) {
+        mPreviewFrameSpacer->requestExit();
+    }
 
     ALOGV("%s: disconnecting stream %d from native window", __FUNCTION__, getId());
 
@@ -1262,6 +1280,17 @@ bool Camera3OutputStream::isConsumedByHWTexture() const {
     return (usage & GRALLOC_USAGE_HW_TEXTURE) != 0;
 }
 
+bool Camera3OutputStream::isConsumedByCPU() const {
+    uint64_t usage = 0;
+    status_t res = getEndpointUsage(&usage);
+    if (res != OK) {
+        ALOGE("%s: getting end point usage failed: %s (%d).", __FUNCTION__, strerror(-res), res);
+        return false;
+    }
+
+    return (usage & GRALLOC_USAGE_SW_READ_MASK) != 0;
+}
+
 void Camera3OutputStream::dumpImageToDisk(nsecs_t timestamp,
         ANativeWindowBuffer* anwBuffer, int fence) {
     // Deriver output file name
@@ -1374,14 +1403,30 @@ nsecs_t Camera3OutputStream::syncTimestampToDisplayLocked(nsecs_t t) {
     const VsyncEventData& vsyncEventData = parcelableVsyncEventData.vsync;
     nsecs_t currentTime = systemTime();
 
-    // Reset capture to present time offset if more than 1 second
-    // between frames.
-    if (t - mLastCaptureTime > kSpacingResetIntervalNs) {
+    // Reset capture to present time offset if:
+    // - More than 1 second between frames.
+    // - The frame duration deviates from multiples of vsync frame intervals.
+    nsecs_t captureInterval = t - mLastCaptureTime;
+    float captureToVsyncIntervalRatio = 1.0f * captureInterval / vsyncEventData.frameInterval;
+    float ratioDeviation = std::fabs(
+            captureToVsyncIntervalRatio - std::roundf(captureToVsyncIntervalRatio));
+    if (captureInterval > kSpacingResetIntervalNs ||
+            ratioDeviation >= kMaxIntervalRatioDeviation) {
+        nsecs_t minPresentT = mLastPresentTime + vsyncEventData.frameInterval / 2;
         for (size_t i = 0; i < VsyncEventData::kFrameTimelinesLength; i++) {
-            if (vsyncEventData.frameTimelines[i].deadlineTimestamp >= currentTime) {
-                mCaptureToPresentOffset =
-                    vsyncEventData.frameTimelines[i].expectedPresentationTime - t;
-                break;
+            const auto& timeline = vsyncEventData.frameTimelines[i];
+            if (timeline.deadlineTimestamp >= currentTime &&
+                    timeline.expectedPresentationTime > minPresentT) {
+                nsecs_t presentT = vsyncEventData.frameTimelines[i].expectedPresentationTime;
+                mCaptureToPresentOffset = presentT - t;
+                mLastCaptureTime = t;
+                mLastPresentTime = presentT;
+
+                // Move the expected presentation time back by 1/3 of frame interval to
+                // mitigate the time drift. Due to time drift, if we directly use the
+                // expected presentation time, often times 2 expected presentation time
+                // falls into the same VSYNC interval.
+                return presentT - vsyncEventData.frameInterval/3;
             }
         }
     }
@@ -1397,16 +1442,27 @@ nsecs_t Camera3OutputStream::syncTimestampToDisplayLocked(nsecs_t t) {
     int minVsyncs = (mMinExpectedDuration - vsyncEventData.frameInterval / 2) /
             vsyncEventData.frameInterval;
     if (minVsyncs < 0) minVsyncs = 0;
-    nsecs_t minInterval = minVsyncs * vsyncEventData.frameInterval + kTimelineThresholdNs;
-    // Find best timestamp in the vsync timeline:
+    nsecs_t minInterval = minVsyncs * vsyncEventData.frameInterval;
+    // Find best timestamp in the vsync timelines:
+    // - Only use at most 3 timelines to avoid long latency
     // - closest to the ideal present time,
     // - deadline timestamp is greater than the current time, and
     // - the candidate present time is at least minInterval in the future
     //   compared to last present time.
-    for (const auto& vsyncTime : vsyncEventData.frameTimelines) {
+    int maxTimelines = std::min(kMaxTimelines, (int)VsyncEventData::kFrameTimelinesLength);
+    float biasForShortDelay = 1.0f;
+    for (int i = 0; i < maxTimelines; i ++) {
+        const auto& vsyncTime = vsyncEventData.frameTimelines[i];
+        if (minVsyncs > 0) {
+            // Bias towards using smaller timeline index:
+            //   i = 0:                bias = 1
+            //   i = maxTimelines-1:   bias = -1
+            biasForShortDelay = 1.0 - 2.0 * i / (maxTimelines - 1);
+        }
         if (std::abs(vsyncTime.expectedPresentationTime - idealPresentT) < minDiff &&
                 vsyncTime.deadlineTimestamp >= currentTime &&
-                vsyncTime.expectedPresentationTime > mLastPresentTime + minInterval) {
+                vsyncTime.expectedPresentationTime >
+                mLastPresentTime + minInterval + biasForShortDelay * kTimelineThresholdNs) {
             expectedPresentT = vsyncTime.expectedPresentationTime;
             minDiff = std::abs(vsyncTime.expectedPresentationTime - idealPresentT);
         }

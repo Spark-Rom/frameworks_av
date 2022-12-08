@@ -1410,24 +1410,18 @@ void Camera3OutputStream::returnPrefetchedBuffersLocked() {
 }
 
 nsecs_t Camera3OutputStream::syncTimestampToDisplayLocked(nsecs_t t) {
-    nsecs_t currentTime = systemTime();
-    if (!mFixedFps) {
-        mLastCaptureTime = t;
-        mLastPresentTime = currentTime;
-        return t;
-    }
-
     ParcelableVsyncEventData parcelableVsyncEventData;
     auto res = mDisplayEventReceiver.getLatestVsyncEventData(&parcelableVsyncEventData);
     if (res != OK) {
         ALOGE("%s: Stream %d: Error getting latest vsync event data: %s (%d)",
                 __FUNCTION__, mId, strerror(-res), res);
         mLastCaptureTime = t;
-        mLastPresentTime = currentTime;
+        mLastPresentTime = t;
         return t;
     }
 
     const VsyncEventData& vsyncEventData = parcelableVsyncEventData.vsync;
+    nsecs_t currentTime = systemTime();
     nsecs_t minPresentT = mLastPresentTime + vsyncEventData.frameInterval / 2;
 
     // Find the best presentation time without worrying about previous frame's
@@ -1532,8 +1526,8 @@ nsecs_t Camera3OutputStream::syncTimestampToDisplayLocked(nsecs_t t) {
         }
     }
 
-    if (expectedPresentT == mLastPresentTime && expectedPresentT <
-            vsyncEventData.frameTimelines[maxTimelines-1].expectedPresentationTime) {
+    if (expectedPresentT == mLastPresentTime && expectedPresentT <=
+            vsyncEventData.frameTimelines[maxTimelines].expectedPresentationTime) {
         // Couldn't find a reasonable presentation time. Using last frame's
         // presentation time would cause a frame drop. The best option now
         // is to use the next VSync as long as the last presentation time

@@ -122,7 +122,6 @@ void PreviewFrameSpacer::queueBufferToClientLocked(
         }
     }
 
-    parent->onCachedBufferQueued();
     mLastCameraPresentTime = currentTime;
     mLastCameraReadoutTime = bufferHolder.readoutTimestamp;
 }

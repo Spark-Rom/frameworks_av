@@ -665,19 +665,11 @@ status_t Camera3Stream::getBuffer(camera_stream_buffer *buffer,
         }
     }
 
-    // Wait for new buffer returned back if we are running into the limit. There
-    // are 2 limits:
-    // 1. The number of HAL buffers is greater than max_buffers
-    // 2. The number of HAL buffers + cached buffers is greater than max_buffers
-    //    + maxCachedBuffers
+    // Wait for new buffer returned back if we are running into the limit.
     size_t numOutstandingBuffers = getHandoutOutputBufferCountLocked();
-    size_t numCachedBuffers = getCachedOutputBufferCountLocked();
-    size_t maxNumCachedBuffers = getMaxCachedOutputBuffersLocked();
-    while (numOutstandingBuffers == camera_stream::max_buffers ||
-            numOutstandingBuffers + numCachedBuffers ==
-            camera_stream::max_buffers + maxNumCachedBuffers) {
-        ALOGV("%s: Already dequeued max output buffers (%d(+%zu)), wait for next returned one.",
-                        __FUNCTION__, camera_stream::max_buffers, maxNumCachedBuffers);
+    if (numOutstandingBuffers == camera_stream::max_buffers) {
+        ALOGV("%s: Already dequeued max output buffers (%d), wait for next returned one.",
+                        __FUNCTION__, camera_stream::max_buffers);
         nsecs_t waitStart = systemTime(SYSTEM_TIME_MONOTONIC);
         if (waitBufferTimeout < kWaitForBufferDuration) {
             waitBufferTimeout = kWaitForBufferDuration;
@@ -695,16 +687,12 @@ status_t Camera3Stream::getBuffer(camera_stream_buffer *buffer,
         }
 
         size_t updatedNumOutstandingBuffers = getHandoutOutputBufferCountLocked();
-        size_t updatedNumCachedBuffers = getCachedOutputBufferCountLocked();
-        if (updatedNumOutstandingBuffers >= numOutstandingBuffers &&
-                updatedNumCachedBuffers == numCachedBuffers) {
-            ALOGE("%s: outstanding buffer count goes from %zu to %zu, "
+        if (updatedNumOutstandingBuffers >= numOutstandingBuffers) {
+            ALOGE("%s: outsanding buffer count goes from %zu to %zu, "
                     "getBuffer(s) call must not run in parallel!", __FUNCTION__,
                     numOutstandingBuffers, updatedNumOutstandingBuffers);
             return INVALID_OPERATION;
         }
-        numOutstandingBuffers = updatedNumOutstandingBuffers;
-        numCachedBuffers = updatedNumCachedBuffers;
     }
 
     res = getBufferLocked(buffer, surface_ids);
@@ -1069,20 +1057,11 @@ status_t Camera3Stream::getBuffers(std::vector<OutstandingBuffer>* buffers,
     }
 
     size_t numOutstandingBuffers = getHandoutOutputBufferCountLocked();
-    size_t numCachedBuffers = getCachedOutputBufferCountLocked();
-    size_t maxNumCachedBuffers = getMaxCachedOutputBuffersLocked();
-    // Wait for new buffer returned back if we are running into the limit. There
-    // are 2 limits:
-    // 1. The number of HAL buffers is greater than max_buffers
-    // 2. The number of HAL buffers + cached buffers is greater than max_buffers
-    //    + maxCachedBuffers
-    while (numOutstandingBuffers + numBuffersRequested > camera_stream::max_buffers ||
-            numOutstandingBuffers + numCachedBuffers + numBuffersRequested >
-            camera_stream::max_buffers + maxNumCachedBuffers) {
-        ALOGV("%s: Already dequeued %zu(+%zu) output buffers and requesting %zu "
-                "(max is %d(+%zu)), waiting.", __FUNCTION__, numOutstandingBuffers,
-                numCachedBuffers, numBuffersRequested, camera_stream::max_buffers,
-                maxNumCachedBuffers);
+    // Wait for new buffer returned back if we are running into the limit.
+    while (numOutstandingBuffers + numBuffersRequested > camera_stream::max_buffers) {
+        ALOGV("%s: Already dequeued %zu output buffers and requesting %zu (max is %d), waiting.",
+                __FUNCTION__, numOutstandingBuffers, numBuffersRequested,
+                camera_stream::max_buffers);
         nsecs_t waitStart = systemTime(SYSTEM_TIME_MONOTONIC);
         if (waitBufferTimeout < kWaitForBufferDuration) {
             waitBufferTimeout = kWaitForBufferDuration;
@@ -1099,16 +1078,13 @@ status_t Camera3Stream::getBuffers(std::vector<OutstandingBuffer>* buffers,
             return res;
         }
         size_t updatedNumOutstandingBuffers = getHandoutOutputBufferCountLocked();
-        size_t updatedNumCachedBuffers = getCachedOutputBufferCountLocked();
-        if (updatedNumOutstandingBuffers >= numOutstandingBuffers &&
-                updatedNumCachedBuffers == numCachedBuffers) {
-            ALOGE("%s: outstanding buffer count goes from %zu to %zu, "
+        if (updatedNumOutstandingBuffers >= numOutstandingBuffers) {
+            ALOGE("%s: outsanding buffer count goes from %zu to %zu, "
                     "getBuffer(s) call must not run in parallel!", __FUNCTION__,
                     numOutstandingBuffers, updatedNumOutstandingBuffers);
             return INVALID_OPERATION;
         }
         numOutstandingBuffers = updatedNumOutstandingBuffers;
-        numCachedBuffers = updatedNumCachedBuffers;
     }
 
     res = getBuffersLocked(buffers);

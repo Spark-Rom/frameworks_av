@@ -152,9 +152,6 @@ struct InFlightRequest {
     // For auto-exposure modes, equal to 1/(lower end of target FPS range)
     nsecs_t maxExpectedDuration;
 
-    // Whether the FPS range is fixed, aka, minFps == maxFps
-    bool isFixedFps;
-
     // Whether the result metadata for this request is to be skipped. The
     // result metadata should be skipped in the case of
     // REQUEST/RESULT error.
@@ -208,7 +205,6 @@ struct InFlightRequest {
             hasCallback(true),
             minExpectedDuration(kDefaultMinExpectedDuration),
             maxExpectedDuration(kDefaultMaxExpectedDuration),
-            isFixedFps(false),
             skipResultMetadata(false),
             errorBufStrategy(ERROR_BUF_CACHE),
             stillCapture(false),
@@ -219,7 +215,7 @@ struct InFlightRequest {
     }
 
     InFlightRequest(int numBuffers, CaptureResultExtras extras, bool hasInput,
-            bool hasAppCallback, nsecs_t minDuration, nsecs_t maxDuration, bool fixedFps,
+            bool hasAppCallback, nsecs_t minDuration, nsecs_t maxDuration,
             const std::set<std::set<String8>>& physicalCameraIdSet, bool isStillCapture,
             bool isZslCapture, bool rotateAndCropAuto, const std::set<std::string>& idsWithZoom,
             nsecs_t requestNs, const SurfaceMap& outSurfaces = SurfaceMap{}) :
@@ -233,7 +229,6 @@ struct InFlightRequest {
             hasCallback(hasAppCallback),
             minExpectedDuration(minDuration),
             maxExpectedDuration(maxDuration),
-            isFixedFps(fixedFps),
             skipResultMetadata(false),
             errorBufStrategy(ERROR_BUF_CACHE),
             physicalCameraIds(physicalCameraIdSet),

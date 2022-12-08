@@ -110,13 +110,12 @@ class Camera3OutputStreamInterface : public virtual Camera3StreamInterface {
     virtual status_t setBatchSize(size_t batchSize = 1) = 0;
 
     /**
-     * Notify the output stream that the minimum frame duration has changed, or
-     * frame rate has switched between variable and fixed.
+     * Notify the output stream that the minimum frame duration has changed.
      *
      * The minimum frame duration is calculated based on the upper bound of
      * AE_TARGET_FPS_RANGE in the capture request.
      */
-    virtual void onMinDurationChanged(nsecs_t duration, bool fixedFps) = 0;
+    virtual void onMinDurationChanged(nsecs_t duration) = 0;
 };
 
 // Helper class to organize a synchronized mapping of stream IDs to stream instances

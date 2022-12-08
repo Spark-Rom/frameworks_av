@@ -858,14 +858,12 @@ void notifyShutter(CaptureOutputStates& states, const camera_shutter_msg_t &msg)
                 r.resultExtras.hasReadoutTimestamp = true;
                 r.resultExtras.readoutTimestamp = msg.readout_timestamp;
             }
-            if (r.minExpectedDuration != states.minFrameDuration ||
-                    r.isFixedFps != states.isFixedFps) {
+            if (r.minExpectedDuration != states.minFrameDuration) {
                 for (size_t i = 0; i < states.outputStreams.size(); i++) {
                     auto outputStream = states.outputStreams[i];
-                    outputStream->onMinDurationChanged(r.minExpectedDuration, r.isFixedFps);
+                    outputStream->onMinDurationChanged(r.minExpectedDuration);
                 }
                 states.minFrameDuration = r.minExpectedDuration;
-                states.isFixedFps = r.isFixedFps;
             }
             if (r.hasCallback) {
                 ALOGVV("Camera %s: %s: Shutter fired for frame %d (id %d) at %" PRId64,

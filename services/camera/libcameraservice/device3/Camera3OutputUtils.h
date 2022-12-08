@@ -106,7 +106,6 @@ namespace camera3 {
         BufferRecordsInterface& bufferRecordsIntf;
         bool legacyClient;
         nsecs_t& minFrameDuration;
-        bool& isFixedFps;
     };
 
     void processCaptureResult(CaptureOutputStates& states, const camera_capture_result *result);

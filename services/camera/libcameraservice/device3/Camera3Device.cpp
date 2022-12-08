@@ -2679,7 +2679,7 @@ void Camera3Device::setErrorStateLockedV(const char *fmt, va_list args) {
 status_t Camera3Device::registerInFlight(uint32_t frameNumber,
         int32_t numBuffers, CaptureResultExtras resultExtras, bool hasInput,
         bool hasAppCallback, nsecs_t minExpectedDuration, nsecs_t maxExpectedDuration,
-        bool isFixedFps, const std::set<std::set<String8>>& physicalCameraIds,
+        const std::set<std::set<String8>>& physicalCameraIds,
         bool isStillCapture, bool isZslCapture, bool rotateAndCropAuto,
         const std::set<std::string>& cameraIdsWithZoom,
         const SurfaceMap& outputSurfaces, nsecs_t requestTimeNs) {
@@ -2688,7 +2688,7 @@ status_t Camera3Device::registerInFlight(uint32_t frameNumber,
 
     ssize_t res;
     res = mInFlightMap.add(frameNumber, InFlightRequest(numBuffers, resultExtras, hasInput,
-            hasAppCallback, minExpectedDuration, maxExpectedDuration, isFixedFps, physicalCameraIds,
+            hasAppCallback, minExpectedDuration, maxExpectedDuration, physicalCameraIds,
             isStillCapture, isZslCapture, rotateAndCropAuto, cameraIdsWithZoom, requestTimeNs,
             outputSurfaces));
     if (res < 0) return res;
@@ -3254,18 +3254,16 @@ bool Camera3Device::RequestThread::sendRequestsBatch() {
     return true;
 }
 
-Camera3Device::RequestThread::ExpectedDurationInfo
-        Camera3Device::RequestThread::calculateExpectedDurationRange(
-                const camera_metadata_t *request) {
-    ExpectedDurationInfo expectedDurationInfo = {
+std::pair<nsecs_t, nsecs_t> Camera3Device::RequestThread::calculateExpectedDurationRange(
+        const camera_metadata_t *request) {
+    std::pair<nsecs_t, nsecs_t> expectedRange(
             InFlightRequest::kDefaultMinExpectedDuration,
-            InFlightRequest::kDefaultMaxExpectedDuration,
-            /*isFixedFps*/false};
+            InFlightRequest::kDefaultMaxExpectedDuration);
     camera_metadata_ro_entry_t e = camera_metadata_ro_entry_t();
     find_camera_metadata_ro_entry(request,
             ANDROID_CONTROL_AE_MODE,
             &e);
-    if (e.count == 0) return expectedDurationInfo;
+    if (e.count == 0) return expectedRange;
 
     switch (e.data.u8[0]) {
         case ANDROID_CONTROL_AE_MODE_OFF:
@@ -3273,32 +3271,29 @@ Camera3Device::RequestThread::ExpectedDurationInfo
                     ANDROID_SENSOR_EXPOSURE_TIME,
                     &e);
             if (e.count > 0) {
-                expectedDurationInfo.minDuration = e.data.i64[0];
-                expectedDurationInfo.maxDuration = expectedDurationInfo.minDuration;
+                expectedRange.first = e.data.i64[0];
+                expectedRange.second = expectedRange.first;
             }
             find_camera_metadata_ro_entry(request,
                     ANDROID_SENSOR_FRAME_DURATION,
                     &e);
             if (e.count > 0) {
-                expectedDurationInfo.minDuration =
-                        std::max(e.data.i64[0], expectedDurationInfo.minDuration);
-                expectedDurationInfo.maxDuration = expectedDurationInfo.minDuration;
+                expectedRange.first = std::max(e.data.i64[0], expectedRange.first);
+                expectedRange.second = expectedRange.first;
             }
-            expectedDurationInfo.isFixedFps = false;
             break;
         default:
             find_camera_metadata_ro_entry(request,
                     ANDROID_CONTROL_AE_TARGET_FPS_RANGE,
                     &e);
             if (e.count > 1) {
-                expectedDurationInfo.minDuration = 1e9 / e.data.i32[1];
-                expectedDurationInfo.maxDuration = 1e9 / e.data.i32[0];
+                expectedRange.first = 1e9 / e.data.i32[1];
+                expectedRange.second = 1e9 / e.data.i32[0];
             }
-            expectedDurationInfo.isFixedFps = (e.data.i32[1] == e.data.i32[0]);
             break;
     }
 
-    return expectedDurationInfo;
+    return expectedRange;
 }
 
 bool Camera3Device::RequestThread::skipHFRTargetFPSUpdate(int32_t tag,
@@ -3913,14 +3908,13 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
                 isZslCapture = true;
             }
         }
-        auto expectedDurationInfo = calculateExpectedDurationRange(settings);
+        auto expectedDurationRange = calculateExpectedDurationRange(settings);
         res = parent->registerInFlight(halRequest->frame_number,
                 totalNumBuffers, captureRequest->mResultExtras,
                 /*hasInput*/halRequest->input_buffer != NULL,
                 hasCallback,
-                expectedDurationInfo.minDuration,
-                expectedDurationInfo.maxDuration,
-                expectedDurationInfo.isFixedFps,
+                /*min*/expectedDurationRange.first,
+                /*max*/expectedDurationRange.second,
                 requestedPhysicalCameras, isStillCapture, isZslCapture,
                 captureRequest->mRotateAndCropAuto, mPrevCameraIdsWithZoom,
                 (mUseHalBufManager) ? uniqueSurfaceIdMap :

@@ -24,7 +24,9 @@
 #include "EngineBase.h"
 #include "EngineDefaultConfig.h"
 #include <TypeConverter.h>
+#include <cutils/properties.h>
 
+static const bool kSupportOdm = property_get_bool("ro.vendor.audio.policy.engine.odm", false );
 namespace android {
 namespace audio_policy {
 
@@ -163,8 +165,29 @@ engineConfig::ParsingResult EngineBase::loadAudioPolicyEngineConfig()
         return stat(path, &fileStat) == 0 && S_ISREG(fileStat.st_mode);
     };
 
-    auto result = fileExists(engineConfig::DEFAULT_PATH) ?
-            engineConfig::parse(engineConfig::DEFAULT_PATH) : engineConfig::ParsingResult{};
+//Platform loading xml file path differentiation
+    char DEFAULT_PATH_ODM[] = "/odm/etc/audio_policy_engine_configuration_mi.xml";
+    char DEFAULT_PATH_MARS[] = "/vendor/etc/audio_policy_engine_configuration_mars.xml";
+    bool isMars = false;
+    char product[PROPERTY_VALUE_MAX] = {0};
+    property_get("ro.boot.product.hardware.sku", product, NULL);
+    if (strncmp(product,"mars", 4) == 0)
+      isMars = true;
+
+    auto result = engineConfig::ParsingResult{};
+    if(kSupportOdm){
+      if(fileExists(DEFAULT_PATH_ODM))
+        result = engineConfig::parse(DEFAULT_PATH_ODM);
+    } else if(isMars){
+      if(fileExists(DEFAULT_PATH_MARS))
+        result = engineConfig::parse(DEFAULT_PATH_MARS);
+    }else{
+      if(fileExists(engineConfig::DEFAULT_PATH))
+        result = engineConfig::parse(engineConfig::DEFAULT_PATH);
+    }
+
+    //auto result = fileExists(engineConfig::DEFAULT_PATH) ?
+            //engineConfig::parse(engineConfig::DEFAULT_PATH) : engineConfig::ParsingResult{};
     if (result.parsedConfig == nullptr) {
         ALOGD("%s: No configuration found, using default matching phone experience.", __FUNCTION__);
         engineConfig::Config config = gDefaultEngineConfig;

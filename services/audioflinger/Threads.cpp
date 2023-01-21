@@ -94,6 +94,11 @@
 #include <pthread.h>
 #include "TypedLogger.h"
 
+// AUDIO ADD
+#include <mediautils/FeatureManager.h>
+// MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+#include "ds_config.h"
+
 // ----------------------------------------------------------------------------
 
 // Note: the following macro is used for extremely verbose logging message.  In
@@ -182,6 +187,10 @@ static const nsecs_t kDirectMinSleepTimeUs = 10000;
 // for underrun detection. If we check too frequently, we may not detect a
 // timestamp update and will falsely detect underrun.
 static const nsecs_t kMinimumTimeBetweenTimestampChecksNs = 150 /* ms */ * 1000;
+
+// Dolby Visualizer
+static const effect_uuid_t IID_VISUALIZER = {0x1d0a1a53, 0x7d5d, 0x48f2, 0x8e71, {0x27,
+                                             0xfb, 0xd1, 0x0d, 0x84, 0x2c}};
 
 // The universal constant for ubiquitous 20ms value. The value of 20ms seems to provide a good
 // balance between power consumption and latency, and allows threads to be scheduled reliably
@@ -1588,6 +1597,12 @@ sp<AudioFlinger::EffectHandle> AudioFlinger::ThreadBase::createEffect_l(
             effect->setInputDevice(inDeviceTypeAddr());
             effect->setMode(mAudioFlinger->getMode());
             effect->setAudioSource(mAudioSource);
+
+            // MIUI ADD: DOLBY_ENABLE
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+                EffectDapController::instance()->effectCreated(effect, this);
+            }
+            // MIUI END
         }
         if (effect->isHapticGenerator()) {
             // TODO(b/184194057): Use the vibrator information from the vibrator that will be used
@@ -1605,6 +1620,9 @@ sp<AudioFlinger::EffectHandle> AudioFlinger::ThreadBase::createEffect_l(
         if (lStatus == OK) {
             lStatus = effect->addHandle(handle.get());
             sendCheckOutputStageEffectsEvent_l();
+        }
+        if (lStatus != NO_ERROR) {
+            goto Exit;
         }
         if (enabled != NULL) {
             *enabled = (int)effect->isEnabled();
@@ -1670,6 +1688,12 @@ void AudioFlinger::ThreadBase::onEffectEnable(const sp<EffectModule>& effect) {
         if (effect->sessionId() == AUDIO_SESSION_OUTPUT_MIX) {
             mAudioFlinger->onNonOffloadableGlobalEffectEnable();
         }
+    }
+    if ((mType== OFFLOAD) && (AudioSystem::getDeviceConnectionState(AUDIO_DEVICE_OUT_PROXY, "")
+        == AUDIO_POLICY_DEVICE_STATE_AVAILABLE) && (memcmp (&effect->mDescriptor.uuid,
+        &IID_VISUALIZER, sizeof (effect_uuid_t)) == 0)) {
+        PlaybackThread *t = (PlaybackThread *)this;
+        t->invalidateTracks(AUDIO_STREAM_MUSIC);
     }
 }
 
@@ -1743,6 +1767,12 @@ status_t AudioFlinger::ThreadBase::addEffect_l(const sp<EffectModule>& effect)
     effect->setInputDevice(inDeviceTypeAddr());
     effect->setMode(mAudioFlinger->getMode());
     effect->setAudioSource(mAudioSource);
+
+    // MIUI ADD: DOLBY_ENABLE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+        EffectDapController::instance()->updateOffload(this);
+    }
+    // MIUI END
 
     return NO_ERROR;
 }
@@ -1842,6 +1872,7 @@ ssize_t AudioFlinger::ThreadBase::ActiveTracks<T>::add(const sp<T> &track) {
         ALOGW("ActiveTracks<T>::add track %p already there", track.get());
         return index;
     }
+
     logTrack("add", track);
     mActiveTracksGeneration++;
     mLatestActiveTrack = track;
@@ -3423,6 +3454,12 @@ void AudioFlinger::PlaybackThread::threadLoop_exit()
         // TODO: should we decActiveTrackCnt() of the cleared track effect chain?
         mActiveTracks.clear();
     }
+    // MIUI ADD: DOLBY_ENABLE, DOLBY_DAP_PREGAIN
+    // When a thread is closed set associated volume to 0
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && mOutput != NULL) {
+        EffectDapController::instance()->updatePregain(mType, mId, mOutput->flags, 0, false);
+    }
+    // MIUI END
 }
 
 /*
@@ -3915,6 +3952,13 @@ bool AudioFlinger::PlaybackThread::threadLoop()
             mMixerStatus = prepareTracks_l(&tracksToRemove);
 
             mActiveTracks.updatePowerState(this);
+            if (mMixerStatus == MIXER_IDLE && !mActiveTracks.size()) {
+                // MIUI ADD: DOLBY_ENABLE
+                if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && mOutput != NULL){
+                    EffectDapController::instance()->updatePregain(mType, mId, mOutput->flags, 0, false);
+                }
+                // MIUI END
+            }
 
             updateMetadata_l();
 
@@ -5173,6 +5217,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
 
     float masterVolume = mMasterVolume;
     bool masterMute = mMasterMute;
+    uint32_t max_vol = 0; /* DOLBY_ENABLE */
 
     if (masterMute) {
         masterVolume = 0;
@@ -5453,11 +5498,18 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
         // if an active track doesn't exist in the AudioMixer, create it.
         // use the trackId as the AudioMixer name.
         if (!mAudioMixer->exists(trackId)) {
+            audio_devices_t outDevice = AUDIO_DEVICE_NONE;
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) &&
+                FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)) {
+                    outDevice = deviceTypesToBitMask(getAudioDeviceTypes(outDeviceTypeAddrs()));
+                }
+
             status_t status = mAudioMixer->create(
                     trackId,
                     track->mChannelMask,
                     track->mFormat,
-                    track->mSessionId);
+                    track->mSessionId,
+                    outDevice /* DOLBY_ENABLE && DOLBY_ATMOS_GAME */);
             if (status != OK) {
                 ALOGW("%s(): AudioMixer cannot create track(%d)"
                         " mask %#x, format %#x, sessionId %d",
@@ -5599,6 +5651,14 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
 
             track->setFinalVolume((vrf + vlf) / 2.f);
 
+            // MIUI ADD: DOLBY_ENABLE
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) &&
+                track->isExternalTrack() &&
+                !EffectDapController::instance()->bypassTrack(track)) {
+                max_vol = max(max_vol, max(vl, vr));
+            }
+            // MIUI END
+
             // Delegate volume control to effect in track effect chain if needed
             if (chain != 0 && chain->setVolume_l(&vl, &vr)) {
                 // Do not ramp volume if volume is controlled by effect
@@ -5666,6 +5726,25 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 AudioMixer::TIMESTRETCH,
                 AudioMixer::PLAYBACK_RATE,
                 &playbackRate);
+
+            // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)) {
+                ALOGV("channel mask:0x%x", track->channelMask());
+                int processedType = (track->channelMask() == AUDIO_CHANNEL_OUT_5POINT1POINT2) ?
+                                ATMOS_GAME_512_ACTIVE : ATMOS_GAME_INACTIVE;
+                mAudioMixer->setParameter(
+                    trackId,
+                    AudioMixer::DAP,
+                    AudioMixer::PROCESSED_TYPE,
+                    (void *)(uintptr_t)processedType);
+                audio_devices_t outDevice = deviceTypesToBitMask(getAudioDeviceTypes(outDeviceTypeAddrs()));
+                mAudioMixer->setParameter(
+                    trackId,
+                    AudioMixer::DAP,
+                    AudioMixer::OUT_DEVICE,
+                    &outDevice);
+            }
+            // MIUI END
 
             /*
              * Select the appropriate output buffer for the track.
@@ -5778,6 +5857,17 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                     if (track->isStopped()) {
                         track->reset();
                     }
+
+                    // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+                    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)){
+                        int processedType = ATMOS_GAME_INACTIVE;
+                        mAudioMixer->setParameter(
+                            trackId,
+                            AudioMixer::DAP,
+                            AudioMixer::PROCESSED_TYPE,
+                            (void *)(uintptr_t)processedType);
+                    }
+                    // MIUI END
                     tracksToRemove->add(track);
                 }
             } else {
@@ -5790,6 +5880,18 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                     // indicate to client process that the track was disabled because of underrun;
                     // it will then automatically call start() when data is available
                     track->disable();
+
+                    // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+                    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)){
+                        int processedType = ATMOS_GAME_INACTIVE;
+                        mAudioMixer->setParameter(
+                            trackId,
+                            AudioMixer::DAP,
+                            AudioMixer::PROCESSED_TYPE,
+                            (void *)(uintptr_t)processedType);
+                    }
+                    // MIUI END
+
                 // If one track is not ready, mark the mixer also not ready if:
                 //  - the mixer was ready during previous round OR
                 //  - no other track is ready
@@ -5921,6 +6023,33 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
     if (fastTracks > 0) {
         mixerStatus = MIXER_TRACKS_READY;
     }
+
+    // MIUI ADD: DOLBY_ENABLE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+        std::string dolbyVersion = EffectDapController::instance()->getVersion();
+        if (EffectDapController::versionCompare(dolbyVersion, DAX3_3POINT6) <= 0) {
+            EffectDapController::instance()->checkForBypass(mActiveTracks, mId);
+        } else if (mType == MIXER) {
+            EffectDapController::instance()->checkAudioTracks(mActiveTracks, mId);
+        }
+
+        // Skip the DS pregain setting if there're no active tracks, or all the active tracks are pausing ones,
+        // so that the last pregain will be adopted and zero volume level will not be sent in the 2 cases above.
+        if (mMixerStatusIgnoringFastTracks == MIXER_TRACKS_READY) {
+            bool hasActiveTrack = false;
+            for (const sp<Track> &track : mActiveTracks) {
+                if (track->mState == TrackBase::ACTIVE) {
+                    hasActiveTrack = true;
+                    break;
+                }
+            }
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && mOutput != NULL){
+                EffectDapController::instance()->updatePregain(mType, mId, mOutput->flags, max_vol, hasActiveTrack);
+            }
+        }
+    }
+    // MIUI END
+
     return mixerStatus;
 }
 
@@ -6205,6 +6334,14 @@ void AudioFlinger::DirectOutputThread::processVolume_l(Track *track, bool lastTr
                 uint32_t vr = (uint32_t)(right * (1 << 24));
                 // Direct/Offload effect chains set output volume in setVolume_l().
                 (void)mEffectChains[0]->setVolume_l(&vl, &vr);
+                // MIUI ADD: DOLBY_ENABLE
+                if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) &&
+                    mOutput != NULL &&
+                    !EffectDapController::instance()->bypassTrack(track)) {
+                    // Update the volume set for the current thread
+                    EffectDapController::instance()->updatePregain(mType, mId, mOutput->flags, max(vl, vr), true);
+                }
+                // MIUI END
             } else {
                 // otherwise we directly set the volume.
                 setVolumeForOutput_l(left, right);
@@ -9782,6 +9919,7 @@ status_t AudioFlinger::MmapThread::start(const AudioClient& client,
 
     track->logBeginInterval(patchSinksToString(&mPatch)); // log to MediaMetrics
     *handle = portId;
+
     broadcast_l();
 
     ALOGV("%s DONE handle %d stream %p", __FUNCTION__, *handle, mHalStream.get());

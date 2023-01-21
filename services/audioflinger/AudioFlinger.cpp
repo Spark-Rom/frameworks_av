@@ -104,6 +104,11 @@
 #define ALOGVV(a...) do { } while(0)
 #endif
 
+// AUDIO ADD
+#include <mediautils/FeatureManager.h>
+// MIUI ADD: DOLBY_ENABLE
+#include "EffectDapController_impl.h"
+
 namespace android {
 
 #define MAX_AAUDIO_PROPERTY_DEVICE_HAL_VERSION 7.1
@@ -119,6 +124,11 @@ static const char kHardwareLockedString[] = "Hardware lock is taken\n";
 static const char kClientLockedString[] = "Client lock is taken\n";
 static const char kNoEffectsFactory[] = "Effects Factory is absent\n";
 
+// MIUI ADD: DOLBY_ENABLE
+static constexpr const effect_uuid_t EFFECT_SL_IID_MISOUND =
+            { 0xf46b26a0, 0xdddd, 0x11db, 0x8afd, {0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b} };
+static const int MISOUND_PARAM_BYPASS_NEXT_OFF = 22;
+// MIUI END
 
 nsecs_t AudioFlinger::mStandbyTimeInNsecs = kDefaultStandbyTimeInNsecs;
 
@@ -371,6 +381,13 @@ AudioFlinger::AudioFlinger()
     mediametrics::LogItem(mMetricsId)
         .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_CTOR)
         .record();
+
+    // MIUI ADD: DOLBY_ENABLE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)){
+        EffectDapController::mInstance = new EffectDapController(this);
+    }
+    // MIUI END
+
 }
 
 void AudioFlinger::onFirstRef()
@@ -503,6 +520,14 @@ std::optional<media::AudioVibratorInfo> AudioFlinger::getDefaultVibratorInfo_l()
 
 AudioFlinger::~AudioFlinger()
 {
+    // MIUI ADD: DOLBY_ENABLE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)){
+        delete EffectDapController::mInstance;
+        EffectDapController::mInstance = NULL;
+        FeatureManager::destoryInstance();
+    }
+    // MIUI END
+
     while (!mRecordThreads.isEmpty()) {
         // closeInput_nonvirtual() will remove specified entry from mRecordThreads
         closeInput_nonvirtual(mRecordThreads.keyAt(0));
@@ -3739,10 +3764,26 @@ void AudioFlinger::updateSecondaryOutputsForTrack_l(
             // use an index mask here to create the PatchRecord.
             inChannelMask = audio_channel_mask_out_to_in_index_mask(track->channelMask());
         }
+
+        // MIUI ADD: DOLBY_ENABLE
+        audio_channel_mask_t patchTrackChannelMask = track->channelMask();
+        audio_format_t trackFormat = track->format();
+        if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+            if (track->channelMask() == AUDIO_CHANNEL_OUT_5POINT1POINT2 ||
+                track->channelMask() == AUDIO_CHANNEL_OUT_7POINT1 ||
+                track->channelMask() == AUDIO_CHANNEL_OUT_7POINT1POINT4) {
+                // This is a workaround method. Current Android System doesn't support 5.1.2/7.1/7.1.4 capture.
+                // Downmix the output PCM to 2.0 so that screen record app can work normally.
+                inChannelMask = AUDIO_CHANNEL_IN_STEREO;
+                patchTrackChannelMask = AUDIO_CHANNEL_OUT_STEREO;
+                trackFormat = AUDIO_FORMAT_PCM_FLOAT;
+            }
+        }
+        // MIUI END
         sp patchRecord = new RecordThread::PatchRecord(nullptr /* thread */,
                                                        track->sampleRate(),
                                                        inChannelMask,
-                                                       track->format(),
+                                                       trackFormat /* DOLBY_ENABLE */,
                                                        frameCount,
                                                        nullptr /* buffer */,
                                                        (size_t)0 /* bufferSize */,
@@ -3762,8 +3803,8 @@ void AudioFlinger::updateSecondaryOutputsForTrack_l(
         sp patchTrack = new PlaybackThread::PatchTrack(secondaryThread,
                                                        track->streamType(),
                                                        track->sampleRate(),
-                                                       track->channelMask(),
-                                                       track->format(),
+                                                       patchTrackChannelMask /* DOLBY_ENABLE */,
+                                                       trackFormat /* DOLBY_ENABLE */,
                                                        frameCount,
                                                        patchRecord->buffer(),
                                                        patchRecord->bufferSize(),
@@ -4278,6 +4319,10 @@ void AudioFlinger::setEffectSuspended(int effectId,
     }
     Mutex::Autolock _sl(thread->mLock);
     sp<EffectModule> effect = thread->getEffect_l(sessionId, effectId);
+    if (effect == nullptr) {
+        ALOGD("%s(), return: sessionId = %d, effectId = %d", __func__, sessionId, effectId);
+        return;
+    }
     thread->setEffectSuspended_l(&effect->desc().type, suspended, sessionId);
 }
 
@@ -4320,6 +4365,28 @@ status_t AudioFlinger::moveEffectChain_l(audio_session_t sessionId,
     status_t status = NO_ERROR;
     std::string errorString;
     while (effect != nullptr) {
+        // MIUI ADD: DOLBY_ENABLE
+        if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+            if (EffectDapController::instance()->isDapEffect(effect) && effect->isOffloadable() && effect->isEnabled()) {
+                EffectDapController::instance()->skipHardBypass();
+            }
+        }
+
+        if ((memcmp(&effect->desc().type, &EFFECT_SL_IID_MISOUND, sizeof(effect_uuid_t)) == 0) &&
+            effect->isOffloadable() && effect->isEnabled()) {
+            std::vector<uint8_t> request(sizeof(effect_param_t) + 2 * sizeof(int32_t));
+            effect_param_t *param = (effect_param_t*) request.data();
+            param->psize = sizeof(int32_t);
+            param->vsize = sizeof(int32_t);
+            *(int32_t*)param->data = MISOUND_PARAM_BYPASS_NEXT_OFF;
+            *((int32_t*)param->data + 1) = 1;
+            // Create a buffer to hold reply data
+            std::vector<uint8_t> response;
+            // Send the command to effect
+            effect->command(EFFECT_CMD_SET_PARAM, request, sizeof(int32_t), &response);
+        }
+        // MIUI END
+
         srcThread->removeEffect_l(effect);
         removed.add(effect);
         status = dstThread->addEffect_l(effect);

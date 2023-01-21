@@ -12,14 +12,14 @@ AudioFlinger::EffectDapController *AudioFlinger::EffectDapController::mInstance 
     Constructor for EffectDapController
 */
 AudioFlinger::EffectDapController::EffectDapController(const sp<AudioFlinger>& audioFlinger)
-    : mAudioFlinger(audioFlinger),
+    : mVersion(""),
+      mAudioFlinger(audioFlinger),
       mEffect(NULL),
       mBypassed(false),
       mDapVol(0),
       mMixerVol(0),
       mDirectVol(0),
       mOffloadVol(0),
-      mVersion(""),
       mMaxMixerVol(0),
       mMaxDirectVol(0),
       mMaxOffloadVol(0),

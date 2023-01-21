@@ -45,6 +45,11 @@
 
 #include "AudioFlinger.h"
 
+// AUDIO ADD
+#include <mediautils/FeatureManager.h>
+// MIUI ADD: DOLBY_ENABLE
+#include "ds_config.h"
+
 // ----------------------------------------------------------------------------
 
 // Note: the following macro is used for extremely verbose logging message.  In
@@ -1567,6 +1572,27 @@ status_t AudioFlinger::EffectModule::setOffloaded(bool offloaded, audio_io_handl
             status = INVALID_OPERATION;
         }
         mOffloaded = false;
+
+        // MIUI ADD: DOLBY_ENABLE
+        if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+            if(memcmp(&mDescriptor.type, &EFFECT_SL_IID_DAP, sizeof(effect_uuid_t)) == 0) {
+                // Set io handle to global effect.
+                status_t cmdStatus;
+                uint32_t size = sizeof(status_t);
+                effect_offload_param_t cmd;
+                cmd.isOffload = mOffloaded;
+                cmd.ioHandle = io;
+                status = mEffectInterface->command(EFFECT_CMD_OFFLOAD,
+                    sizeof(effect_offload_param_t),
+                    &cmd,
+                    &size,
+                    &cmdStatus);
+                if (status == NO_ERROR) {
+                    status = cmdStatus;
+                }
+            }
+        }
+        // MIUI END
     }
     ALOGV("setOffloaded() offloaded %d io %d status %d", offloaded, io, status);
     return status;
@@ -1839,6 +1865,12 @@ Status AudioFlinger::EffectHandle::enable(int32_t* _aidl_return)
     if (status != NO_ERROR) {
         mEnabled = false;
     }
+
+    sp<EffectModule> module = effect->asEffectModule();
+    if(module != nullptr) {
+        effect->asEffectModule()->updateState();
+    }
+
     RETURN(status);
 }
 
@@ -2354,6 +2386,13 @@ status_t AudioFlinger::EffectChain::addEffect_ll(const sp<EffectModule>& effect)
         ALOGV("%s effect %p, added in chain %p at rank %zu",
                 __func__, effect.get(), this, idx_insert);
     }
+
+    // MIUI ADD: DOLBY_ENABLE
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+        return effect->configure();
+    }
+    // MIUI END
+
     effect->configure();
 
     return NO_ERROR;
@@ -2450,6 +2489,12 @@ size_t AudioFlinger::EffectChain::removeEffect_l(const sp<EffectModule>& effect,
                 mEffects[i]->stop();
             }
             if (release) {
+                // MIUI ADD: DOLBY_ENABLE
+                if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE)) {
+                    EffectDapController::instance()->effectReleased(mEffects[i]);
+                }
+                // MIUI END
+
                 mEffects[i]->release_l();
             }
 
@@ -2800,6 +2845,20 @@ bool AudioFlinger::EffectChain::isEffectEligibleForSuspend(const effect_descript
          (memcmp(&desc.type, SL_IID_DYNAMICSPROCESSING, sizeof(effect_uuid_t)) == 0))) {
         return false;
     }
+
+    // MIUI ADD: DOLBY_ENABLE, DOLBY_VQE
+    if (mSessionId == AUDIO_SESSION_OUTPUT_MIX) {
+        if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) &&
+            (memcmp(&desc.type, &EFFECT_SL_IID_DAP, sizeof(effect_uuid_t)) == 0)) {
+            return false;
+        }
+        if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_VQE) &&
+            (memcmp(&desc.type, &EFFECT_SL_IID_VQE, sizeof(effect_uuid_t)) == 0)) {
+            return false;
+        }
+    }
+    // MIUI END
+
     return true;
 }
 

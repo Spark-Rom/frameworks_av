@@ -94,6 +94,7 @@ public:
 private:
     friend class AudioFlinger;  // for mState
 
+private:
     DISALLOW_COPY_AND_ASSIGN(RecordTrack);
 
     // AudioBufferProvider interface
@@ -101,9 +102,9 @@ private:
     // releaseBuffer() not overridden
 
     bool                mOverflow;  // overflow on most recent attempt to fill client buffer
-
+public:
             AudioBufferProvider::Buffer mSink;  // references client's buffer sink in shared memory
-
+private:
             // sync event triggering actual audio capture. Frames read before this event will
             // be dropped and therefore not read by the application.
             sp<SyncEvent>                       mSyncStartEvent;
@@ -116,8 +117,10 @@ private:
             // used by resampler to find source frames
             ResamplerBufferProvider            *mResamplerBufferProvider;
 
+public:
             // used by the record thread to convert frames to proper destination format
             RecordBufferConverter              *mRecordBufferConverter;
+private:
             audio_input_flags_t                mFlags;
 
             bool                               mSilenced;

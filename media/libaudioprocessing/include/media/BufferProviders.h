@@ -103,7 +103,9 @@ class DownmixerBufferProvider : public CopyBufferProvider {
 public:
     DownmixerBufferProvider(audio_channel_mask_t inputChannelMask,
             audio_channel_mask_t outputChannelMask, audio_format_t format,
-            uint32_t sampleRate, int32_t sessionId, size_t bufferFrameCount);
+            uint32_t sampleRate, int32_t sessionId, size_t bufferFrameCount,
+            int32_t processedType = 0, /* DOLBY_ENABLE && DOLBY_ATMOS_GAME */
+            uint32_t outDevice = AUDIO_DEVICE_NONE /* DOLBY_ENABLE && DOLBY_ATMOS_GAME */);
     virtual ~DownmixerBufferProvider();
     //Overrides
     virtual void copyFrames(void *dst, const void *src, size_t frames);
@@ -125,6 +127,14 @@ protected:
     static effect_descriptor_t sDwnmFxDesc;
     // indicates whether a downmix effect has been found and is usable by this mixer
     static bool                sIsMultichannelCapable;
+
+    // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+    // effect descriptor for the Dap used by the mixer
+    static effect_descriptor_t sDapFxDesc;
+    // indicates whether a Dap effect has been found and is usable by this mixer
+    static bool                sIsDapMultichannelCapable;
+    // MIUI END
+
     // FIXME: should we allow effects outside of the framework?
     // We need to here. A special ioId that must be <= -2 so it does not map to a session.
     static const int32_t SESSION_ID_INVALID_AND_IGNORED = -2;

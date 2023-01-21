@@ -58,6 +58,7 @@ public:
         RAMP_VOLUME     = 0x3002, // ramp to new volume
         VOLUME          = 0x3003, // don't ramp
         TIMESTRETCH     = 0x3004,
+        DAP             = 0x3005, // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
 
         // set Parameter names
         // for target TRACK
@@ -85,6 +86,7 @@ public:
         VOLUME0         = 0x4200,
         VOLUME1         = 0x4201,
         AUXLEVEL        = 0x4210,
+        FRAME_COUNT     = 0x5000, // update mFrameCount
     };
 
     AudioMixerBase(size_t frameCount, uint32_t sampleRate)
@@ -110,7 +112,9 @@ public:
     //         BAD_VALUE if the format does not satisfy isValidFormat()
     //                   or the channelMask does not satisfy isValidChannelMask().
     status_t    create(
-            int name, audio_channel_mask_t channelMask, audio_format_t format, int sessionId);
+            int name, audio_channel_mask_t channelMask, audio_format_t format, int sessionId,
+            uint32_t outDevice = AUDIO_DEVICE_NONE /* DOLBY_ENABLE && DOLBY_ATMOS_GAME */
+            );
 
     bool        exists(int name) const {
         return mTracks.count(name) > 0;
@@ -289,6 +293,7 @@ public:
 
         audio_channel_mask_t mMixerChannelMask;
         uint32_t             mMixerChannelCount;
+        uint32_t             mOutDevice; /* DOLBY_ENABLE && DOLBY_ATMOS_GAME */
 
       protected:
 
@@ -345,7 +350,8 @@ public:
 
     // initialization constants
     const uint32_t mSampleRate;
-    const size_t mFrameCount;
+    // dynamic frameCount
+    size_t mFrameCount;
 
     process_hook_t mHook = &AudioMixerBase::process__nop;   // one of process__*, never nullptr
 

@@ -40,6 +40,7 @@ cc_library {
         "ThreadSnapshot.cpp",
         "TimeCheck.cpp",
         "TimerThread.cpp",
+        "FeatureManager.cpp", // Dolby Atmos
     ],
     static_libs: [
         "libc_malloc_debug_backtrace",
@@ -137,7 +138,6 @@ cc_library {
     local_include_dirs: ["include"],
     export_include_dirs: ["include"],
 }
-
 
 cc_library_headers {
     name: "libmediautils_headers",

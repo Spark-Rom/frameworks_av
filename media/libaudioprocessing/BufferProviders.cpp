@@ -31,6 +31,11 @@
 #include <system/audio_effects/effect_downmix.h>
 #include <utils/Log.h>
 
+// AUDIO ADD
+#include <mediautils/FeatureManager.h>
+// MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+#include "ds_config.h"
+
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof((x)[0]))
 #endif
@@ -143,7 +148,10 @@ void CopyBufferProvider::setBufferProvider(AudioBufferProvider *p) {
 DownmixerBufferProvider::DownmixerBufferProvider(
         audio_channel_mask_t inputChannelMask,
         audio_channel_mask_t outputChannelMask, audio_format_t format,
-        uint32_t sampleRate, int32_t sessionId, size_t bufferFrameCount) :
+        uint32_t sampleRate, int32_t sessionId, size_t bufferFrameCount,
+        int32_t processedType, /* DOLBY_ENABLE && DOLBY_ATMOS_GAME */
+        uint32_t outDevice /* DOLBY_ENABLE && DOLBY_ATMOS_GAME */
+        ) :
         CopyBufferProvider(
             audio_bytes_per_sample(format) * audio_channel_count_from_out_mask(inputChannelMask),
             audio_bytes_per_sample(format) * audio_channel_count_from_out_mask(outputChannelMask),
@@ -161,16 +169,41 @@ DownmixerBufferProvider::DownmixerBufferProvider(
         ALOGE("DownmixerBufferProvider() error: could not obtain the effects factory");
         return;
     }
-    if (mEffectsFactory->createEffect(&sDwnmFxDesc.uuid,
-                                      sessionId,
-                                      SESSION_ID_INVALID_AND_IGNORED,
-                                      AUDIO_PORT_HANDLE_NONE,
-                                      &mDownmixInterface) != 0) {
-         ALOGE("DownmixerBufferProvider() error creating downmixer effect");
-         mDownmixInterface.clear();
-         mEffectsFactory.clear();
-         return;
-     }
+
+    // MIUI MOD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+    bool isDapReady = false;
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)) {
+        if (sIsDapMultichannelCapable && inputChannelMask == AUDIO_CHANNEL_OUT_5POINT1POINT2
+            && processedType == ATMOS_GAME_512_ACTIVE) {
+            ALOGD("DownmixerBufferProvider() create DAP effect");
+            if (mEffectsFactory->createEffect(&sDapFxDesc.uuid,
+                                            sessionId,
+                                            SESSION_ID_INVALID_AND_IGNORED,
+                                            AUDIO_PORT_HANDLE_NONE,
+                                            &mDownmixInterface) != 0) {
+                ALOGE("DownmixerBufferProvider() error creating DAP effect");
+                mDownmixInterface.clear();
+            } else {
+                isDapReady = true;
+            }
+        }
+    }
+
+    if (!isDapReady) {
+        ALOGD("DownmixerBufferProvider() create downmixer effect");
+        if (mEffectsFactory->createEffect(&sDwnmFxDesc.uuid,
+                                        sessionId,
+                                        SESSION_ID_INVALID_AND_IGNORED,
+                                        AUDIO_PORT_HANDLE_NONE,
+                                        &mDownmixInterface) != 0) {
+            ALOGE("DownmixerBufferProvider() error creating downmixer effect");
+            mDownmixInterface.clear();
+            mEffectsFactory.clear();
+            return;
+        }
+    }
+    // MIUI END
+
      // channel input configuration will be overridden per-track
      mDownmixConfig.inputCfg.channels = inputChannelMask;   // FIXME: Should be bits
      mDownmixConfig.outputCfg.channels = outputChannelMask; // FIXME: should be bits
@@ -243,6 +276,25 @@ DownmixerBufferProvider::DownmixerBufferProvider(
          mEffectsFactory.clear();
          return;
      }
+
+     // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+     if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)) {
+         if (isDapReady) {
+            replySize = sizeof(int);
+            status = mDownmixInterface->command(EFFECT_CMD_SET_DEVICE, sizeof(int), &outDevice, &replySize, &cmdStatus);
+            if (status != 0 || cmdStatus != 0) {
+                ALOGE("DownmixerBufferProvider() error %d cmdStatus %d while setting DAP out device",
+                    status, cmdStatus);
+                mOutBuffer.clear();
+                mInBuffer.clear();
+                mDownmixInterface.clear();
+                mEffectsFactory.clear();
+            }
+             ALOGV("DownmixerBufferProvider() DAP effect is ready");
+             return;
+         }
+     }
+     // MIUI END
 
      // Set downmix type
      // parameter size rounded for padding on 32bit boundary
@@ -331,11 +383,34 @@ void DownmixerBufferProvider::copyFrames(void *dst, const void *src, size_t fram
         }
     }
     ALOGW_IF(!sIsMultichannelCapable, "unable to find downmix effect");
+
+    // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+    if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)) {
+        for (uint32_t i = 0 ; i < numEffects ; i++) {
+            if (effectsFactory->getDescriptor(i, &sDapFxDesc) == 0) {
+                ALOGV("effect %d is called %s, type %x", i, sDapFxDesc.name, sDapFxDesc.type.timeLow);
+                if (memcmp(&sDapFxDesc.type, &EFFECT_SL_IID_GAME_DAP, sizeof(effect_uuid_t)) == 0) {
+                    ALOGI("found effect \"%s\" from %s",
+                            sDapFxDesc.name, sDapFxDesc.implementor);
+                    sIsDapMultichannelCapable = true;
+                    break;
+                }
+            }
+        }
+        ALOGW_IF(!sIsDapMultichannelCapable, "unable to find DAP effect");
+    }
+    // MIUI END
+
     return NO_INIT;
 }
 
 /*static*/ bool DownmixerBufferProvider::sIsMultichannelCapable = false;
 /*static*/ effect_descriptor_t DownmixerBufferProvider::sDwnmFxDesc;
+
+// MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+/*static*/ bool DownmixerBufferProvider::sIsDapMultichannelCapable = false;
+/*static*/ effect_descriptor_t DownmixerBufferProvider::sDapFxDesc;
+// MIUI END
 
 RemixBufferProvider::RemixBufferProvider(audio_channel_mask_t inputChannelMask,
         audio_channel_mask_t outputChannelMask, audio_format_t format,

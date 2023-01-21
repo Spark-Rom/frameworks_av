@@ -36,6 +36,9 @@
 
 #include "AudioMixerOps.h"
 
+// AUDIO ADD
+#include <mediautils/FeatureManager.h>
+
 // The FCC_2 macro refers to the Fixed Channel Count of 2 for the legacy integer mixer.
 #ifndef FCC_2
 #define FCC_2 2
@@ -177,7 +180,8 @@ status_t AudioMixer::Track::prepareForDownmix()
             mDownmixerBufferProvider.reset(new DownmixerBufferProvider(
                     channelMask, mMixerChannelMask,
                     format,
-                    sampleRate, sessionId, kCopyBufferFrameCount));
+                    sampleRate, sessionId, kCopyBufferFrameCount,
+                    mProcessedType /* DOLBY_ENABLE */));
             if (static_cast<DownmixerBufferProvider *>(mDownmixerBufferProvider.get())
                     ->isValid()) {
                 mDownmixRequiresFormat = format;
@@ -452,6 +456,34 @@ void AudioMixer::setParameter(int name, int target, int param, void *value)
             LOG_ALWAYS_FATAL("setParameter timestretch: bad param %d", param);
         }
         break;
+    // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+    case DAP:
+        switch (param) {
+        case PROCESSED_TYPE: {
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)) {
+                int32_t processed = static_cast<int32_t>(valueInt);
+                if (track->mProcessedType != processed) {
+                    track->mProcessedType = processed;
+                    ALOGD("setParameter(DAP, process type, %d)", processed);
+                    track->prepareForDownmix();
+                }
+            }
+        } break;
+        case OUT_DEVICE: {
+            if (FeatureManager::isFeatureEnable(AUDIO_DOLBY_ENABLE) && FeatureManager::isFeatureEnable(AUDIO_DOLBY_ATMOS_GAME)) {
+                uint32_t device = *reinterpret_cast<uint32_t*>(value);
+                if (track->mOutDevice != device) {
+                    track->mOutDevice = device;
+                    ALOGD("setParameter(DAP, device, %#x)", device);
+                    track->prepareForDownmix();
+                }
+            }
+        } break;
+        default:
+           LOG_ALWAYS_FATAL("setParameter DAP: bad param %d", param);
+        }
+        break;
+    // MIUI END
 
     default:
         LOG_ALWAYS_FATAL("setParameter: bad target %d", target);
@@ -533,6 +565,7 @@ status_t AudioMixer::postCreateTrack(TrackBase *track)
     t->channelMask = channelMask;
     t->mInputBufferProvider = NULL;
     t->mDownmixRequiresFormat = AUDIO_FORMAT_INVALID; // no format required
+    t->mProcessedType = 0; // DOLBY_ENABLE && DOLBY_ATMOS_GAME
     t->mPlaybackRate = AUDIO_PLAYBACK_RATE_DEFAULT;
     // haptic
     t->mHapticPlaybackEnabled = false;

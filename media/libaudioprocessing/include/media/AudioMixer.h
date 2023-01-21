@@ -54,6 +54,11 @@ public:
         // for target TIMESTRETCH
         PLAYBACK_RATE   = 0x4300, // Configure timestretch on this track name;
                                   // parameter 'value' is a pointer to the new playback rate.
+
+        // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
+        OUT_DEVICE      = 0x4400,
+        PROCESSED_TYPE  = 0x4401,
+        // MIUI END
     };
 
     AudioMixer(size_t frameCount, uint32_t sampleRate)
@@ -145,6 +150,7 @@ private:
         uint32_t             mAdjustInChannelCount;
         uint32_t             mAdjustOutChannelCount;
         bool                 mKeepContractedChannels;
+        int32_t              mProcessedType; // MIUI ADD: DOLBY_ENABLE && DOLBY_ATMOS_GAME
     };
 
     inline std::shared_ptr<Track> getTrack(int name) {

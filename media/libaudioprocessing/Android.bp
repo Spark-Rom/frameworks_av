@@ -69,6 +69,7 @@ cc_library_shared {
         "libaudiohal",
         "libsonic",
         "libvibrator",
+        "libmediautils",
     ],
 
     whole_static_libs: ["libaudioprocessing_base"],
